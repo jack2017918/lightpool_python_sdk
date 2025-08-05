@@ -1,0 +1,16 @@
+aiohttp>=3.8.0
+cryptography>=3.4.8
+eth-account>=0.8.0
+eth-utils>=2.0.0
+pydantic>=1.10.0
+typing-extensions>=4.0.0
+asyncio-mqtt>=0.11.0
+websockets>=10.0
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+black>=22.0.0
+flake8>=5.0.0
+mypy>=0.991
+attrs2bin>=0.1.0
+attrs>=21.0.0 
