@@ -5,7 +5,7 @@ Bincode兼容的序列化实现
 
 import struct
 from typing import Union, Any, Tuple
-from .types import CreateTokenParams, CreateMarketParams, PlaceOrderParams, CancelOrderParams, ObjectID, Address
+from .types import CreateTokenParams, CreateMarketParams, PlaceOrderParams, CancelOrderParams, UpdateMarketParams, ObjectID, Address
 from .event_types import MarketCreatedEvent, TokenCreatedEvent
 
 
@@ -156,6 +156,51 @@ def serialize_cancel_order_params(params: CancelOrderParams) -> bytes:
         return order_id_bytes
 
 
+def serialize_update_market_params(params: UpdateMarketParams) -> bytes:
+    """序列化UpdateMarketParams，与Rust bincode格式兼容"""
+    import struct
+    
+    result = bytearray()
+    
+    # 序列化min_order_size (Option<u64>)
+    if params.min_order_size is not None:
+        result.extend(b'\x01')  # Some
+        result.extend(struct.pack('<Q', params.min_order_size))
+    else:
+        result.extend(b'\x00')  # None
+    
+    # 序列化maker_fee_bps (Option<u16>)
+    if params.maker_fee_bps is not None:
+        result.extend(b'\x01')  # Some
+        result.extend(struct.pack('<H', params.maker_fee_bps))
+    else:
+        result.extend(b'\x00')  # None
+    
+    # 序列化taker_fee_bps (Option<u16>)
+    if params.taker_fee_bps is not None:
+        result.extend(b'\x01')  # Some
+        result.extend(struct.pack('<H', params.taker_fee_bps))
+    else:
+        result.extend(b'\x00')  # None
+    
+    # 序列化allow_market_orders (Option<bool>)
+    if params.allow_market_orders is not None:
+        result.extend(b'\x01')  # Some
+        result.extend(struct.pack('<?', params.allow_market_orders))
+    else:
+        result.extend(b'\x00')  # None
+    
+    # 序列化state (Option<MarketState>)
+    if params.state is not None:
+        result.extend(b'\x01')  # Some
+        state_index = params.state.to_rust_index()
+        result.extend(struct.pack('<I', state_index))  # u32 for enum
+    else:
+        result.extend(b'\x00')  # None
+    
+    return bytes(result)
+
+
 # 通用序列化函数
 def bincode_serialize(obj: Any) -> bytes:
     """通用bincode序列化函数"""
@@ -167,6 +212,8 @@ def bincode_serialize(obj: Any) -> bytes:
         return serialize_place_order_params(obj)
     elif isinstance(obj, CancelOrderParams):
         return serialize_cancel_order_params(obj)
+    elif isinstance(obj, UpdateMarketParams):
+        return serialize_update_market_params(obj)
     else:
         raise ValueError(f"Unsupported type for bincode serialization: {type(obj)}")
 

@@ -147,11 +147,19 @@ class ActionBuilder:
     @staticmethod
     def update_market(market_address: Address, market_id: ObjectID, params: UpdateMarketParams) -> Action:
         """更新市场操作"""
+        # 使用自定义bincode兼容的序列化，与Rust SDK保持一致
+        params_bytes = bincode_serialize(params)
+        
+        # 添加调试日志
+        print(f"📤 [PYTHON SDK] UpdateMarket serialized params hex: {params_bytes.hex()}")
+        print(f"📤 [PYTHON SDK] UpdateMarket params length: {len(params_bytes)} bytes")
+        print(f"📤 [PYTHON SDK] UpdateMarket original params: {params}")
+        
         return Action(
             input_objects=[market_id],
             target_address=market_address,
             action_name="mkt_update",
-            params=asdict(params)
+            params=params_bytes
         )
     
     @staticmethod

@@ -16,15 +16,17 @@ from typing import Optional, Tuple
 from lightpool_sdk import (
     LightPoolClient, Signer, TransactionBuilder, ActionBuilder,
     Address, ObjectID, U256,
-    CreateTokenParams, CreateMarketParams, PlaceOrderParams, CancelOrderParams,
+    CreateTokenParams, CreateMarketParams, PlaceOrderParams, CancelOrderParams, UpdateMarketParams,
     OrderSide, TimeInForce, MarketState, LimitOrderParams, OrderParamsType,
     TOKEN_CONTRACT_ADDRESS, SPOT_CONTRACT_ADDRESS, create_limit_order_params
 )
+from lightpool_sdk.types import OrderId
+from lightpool_sdk.event_parser import print_receipt_json, print_spot_receipt_json
 
-# 配置日志
+# 配置日志 - 简化输出
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -99,6 +101,9 @@ class SpotTradingExample:
             if response["receipt"].is_success():
                 logger.info(f"✅ {symbol} 代币创建成功")
                 
+                # 使用与Rust SDK相同的格式打印事件
+                print_receipt_json(response["receipt"].__dict__)
+                
                 # 从事件中提取代币信息
                 events = response["receipt"].events
                 for event in events:
@@ -114,7 +119,7 @@ class SpotTradingExample:
                                 from lightpool_sdk.bincode import deserialize_token_created_event
                                 token_event = deserialize_token_created_event(data)
                                 
-                                logger.info(f"📊 成功解析代币事件: token_id={token_event.token_id}, balance_id={token_event.balance_id}")
+                                logger.info(f"📊 代币ID: {token_event.token_id}")
                                 return token_event.token_id, token_event.token_address, token_event.balance_id
                             except Exception as e:
                                 logger.warning(f"⚠️ bincode反序列化失败: {e}")
@@ -194,7 +199,9 @@ class SpotTradingExample:
             
             if response["receipt"].is_success():
                 logger.info(f"✅ {name} 市场创建成功")
-                logger.info(f"------完整响应: {response}")
+                
+                # 使用与Rust SDK相同的格式打印事件
+                print_spot_receipt_json(response["receipt"].__dict__)
                 
                 # 从事件中提取市场信息
                 events = response["receipt"].events
@@ -210,7 +217,7 @@ class SpotTradingExample:
                                 from lightpool_sdk.bincode import deserialize_market_created_event
                                 market_event = deserialize_market_created_event(data)
                                 
-                                logger.info(f"📊 成功解析市场事件: market_id={market_event.market_id}")
+                                logger.info(f"📊 市场ID: {market_event.market_id}")
                                 return market_event.market_id, market_event.market_address
                                 
                             except Exception as e:
@@ -250,22 +257,64 @@ class SpotTradingExample:
         logger.warning("⚠️ 使用随机market_id")
         return ObjectID.random(), SPOT_CONTRACT_ADDRESS
     
+    def _extract_order_id_from_events(self, events) -> Optional[OrderId]:
+        """从事件中提取订单ID"""
+        try:
+            for event in events:
+                # 检查事件类型
+                event_type = event.get("event_type", {})
+                
+                if isinstance(event_type, dict) and event_type.get("Call") == "order_created":
+                    # 解析order_created事件的数据
+                    event_data = event.get("data", {})
+                    
+                    if isinstance(event_data, dict):
+                        bytes_data = event_data.get("Bytes", [])
+                        
+                        if len(bytes_data) >= 32:  # OrderId需要32字节
+                            try:
+                                data = bytes(bytes_data)
+                                
+                                # 手动解析OrderCreatedEvent结构
+                                order_id_bytes = data[0:32]
+                                order_id = OrderId(order_id_bytes)
+                                logger.info(f"📊 订单ID: {order_id}")
+                                return order_id
+                                
+                            except Exception as e:
+                                logger.warning(f"⚠️ 解析OrderCreatedEvent失败: {e}")
+                                # 回退到手动解析
+                                return self._fallback_parse_order_event(data)
+                        else:
+                            logger.warning(f"⚠️ 字节数据长度不足: {len(bytes_data)} < 32")
+        except Exception as e:
+            logger.warning(f"⚠️ 提取订单ID失败: {e}")
+        
+        logger.warning("⚠️ 未找到order_created事件或解析失败")
+        return None
+    
+    def _fallback_parse_order_event(self, data: bytes) -> Optional[OrderId]:
+        """回退解析订单事件方法"""
+        try:
+            # 尝试手动解析关键字段
+            # 注意：这种方法不够可靠，仅用于调试
+            if len(data) >= 32:  # OrderId需要32字节
+                order_id_bytes = data[0:32]  # OrderId是32字节
+                order_id = OrderId(order_id_bytes)
+                
+                logger.info(f"📊 回退解析订单成功: order_id={order_id}")
+                return order_id
+        except Exception as e:
+            logger.warning(f"⚠️ 回退解析订单也失败: {e}")
+        
+        return None
+    
     async def place_order(self, market_address: Address, market_id: ObjectID,
                          balance_id: ObjectID, side: OrderSide, amount: int,
-                         price: int, signer: Signer) -> Optional[ObjectID]:
+                         price: int, signer: Signer) -> Optional[OrderId]:
         """下单"""
         side_str = "买单" if side == OrderSide.BUY else "卖单"
         logger.info(f"下{side_str}: {amount} 数量, 价格 {price}")
-        logger.info(f"------market_id: {market_id}, balance_id: {balance_id}")
-        
-        # 添加详细日志来调试参数
-        logger.info(f"------参数详情:")
-        logger.info(f"  side: {side} (Rust index: {side.to_rust_index()})")
-        logger.info(f"  amount: {amount}")
-        logger.info(f"  price: {price}")
-        logger.info(f"  market_address: {market_address}")
-        logger.info(f"  market_id: {market_id}")
-        logger.info(f"  balance_id: {balance_id}")
         
         # 修正：使用正确的OrderParamsType构造
         # 根据Rust代码，OrderParamsType::Limit { tif } 需要包含TimeInForce
@@ -276,20 +325,7 @@ class SpotTradingExample:
             tif=TimeInForce.GTC  # 使用Good Till Cancel
         )
         
-        logger.info(f"------构造的PlaceOrderParams:")
-        logger.info(f"  side: {order_params.side}")
-        logger.info(f"  amount: {order_params.amount}")
-        logger.info(f"  order_type: {order_params.order_type}")
-        logger.info(f"  limit_price: {order_params.limit_price}")
-        
         action = ActionBuilder.place_order(market_address, market_id, balance_id, order_params)
-        
-        logger.info(f"------构造的Action:")
-        logger.info(f"  action_name: {action.action_name}")
-        logger.info(f"  params_hex: {action.params.hex()}")
-        logger.info(f"  input_objects: {action.input_objects}")
-        logger.info(f"  target_address: {action.target_address}")
-        logger.info(f"  target_address: {action.target_address}")
         
         tx = TransactionBuilder.new()\
             .sender(signer.address())\
@@ -302,10 +338,18 @@ class SpotTradingExample:
             
             if response["receipt"].is_success():
                 logger.info(f"✅ {side_str}下单成功")
-                logger.info(f"------事件: {response['receipt'].events}")
-                # 从事件中提取订单ID（简化版本）
-                order_id = ObjectID.random()  # 模拟
-                return order_id
+                
+                # 使用与Rust SDK相同的格式打印事件
+                print_spot_receipt_json(response["receipt"].__dict__)
+                
+                # 从事件中提取订单ID
+                order_id = self._extract_order_id_from_events(response["receipt"].events)
+                if order_id:
+                    logger.info(f"📊 成功提取订单ID: {order_id}")
+                    return order_id
+                else:
+                    logger.warning("⚠️ 无法从事件中提取订单ID，使用模拟ID")
+                    return ObjectID.random()  # 回退到模拟ID
             else:
                 logger.error(f"❌ {side_str}下单失败")
                 logger.error(f"------状态: {response['receipt'].status}")
@@ -318,7 +362,7 @@ class SpotTradingExample:
             return None
     
     async def cancel_order(self, market_address: Address, market_id: ObjectID,
-                          order_id: ObjectID, signer: Signer) -> bool:
+                          order_id: OrderId, signer: Signer) -> bool:
         """撤单"""
         logger.info(f"撤单: {order_id}")
         
@@ -337,6 +381,10 @@ class SpotTradingExample:
             
             if response["receipt"].is_success():
                 logger.info("✅ 撤单成功")
+                
+                # 使用与Rust SDK相同的格式打印事件
+                print_spot_receipt_json(response["receipt"].__dict__)
+                
                 return True
             else:
                 logger.warning("⚠️ 撤单失败（可能订单已成交或被撤销）")
@@ -405,7 +453,6 @@ class SpotTradingExample:
             # 步骤4: 交易者1下卖单 (使用BTC余额)
             logger.info("\n步骤4: 交易者1下卖单")
             logger.info("-" * 30)
-            logger.info(f"使用BTC余额ID: {btc_balance_id}")
             sell_order_id = await self.place_order(
                 market_address=market_address,
                 market_id=market_id,
@@ -419,7 +466,6 @@ class SpotTradingExample:
             # 步骤5: 交易者2下买单 (使用USDT余额)
             logger.info("\n步骤5: 交易者2下买单")
             logger.info("-" * 30)
-            logger.info(f"使用USDT余额ID: {usdt_balance_id}")
             buy_order_id = await self.place_order(
                 market_address=market_address,
                 market_id=market_id,
@@ -444,6 +490,37 @@ class SpotTradingExample:
                     signer=self.trader1
                 )
             
+            # 步骤7: 更新市场参数
+            logger.info("\n步骤7: 更新市场参数")
+            logger.info("-" * 30)
+            
+            # 创建更新市场参数
+            market_update_params = UpdateMarketParams(
+                min_order_size=50_000,        # 减少最小订单大小到0.05 BTC
+                maker_fee_bps=5,              # 减少maker费用到0.05%
+                taker_fee_bps=15,             # 减少taker费用到0.15%
+                allow_market_orders=True,      # 允许市价单
+                state=MarketState.ACTIVE       # 保持活跃状态
+            )
+            
+            action = ActionBuilder.update_market(market_address, market_id, market_update_params)
+            
+            tx = TransactionBuilder.new()\
+                .sender(self.trader1.address())\
+                .expiration(0xffffffffffffffff)\
+                .add_action(action)\
+                .build_and_sign(self.trader1)
+            
+            response = await self.client.submit_transaction(tx)
+            logger.info(f"交易响应: {response}")
+            
+            if response["receipt"].is_success():
+                logger.info("✅ 市场参数更新成功")
+                # 使用与Rust SDK相同的格式打印事件
+                print_spot_receipt_json(response["receipt"].__dict__)
+            else:
+                logger.error("❌ 市场参数更新失败")
+            
             logger.info("\n🎉 现货交易示例完成!")
             logger.info("=" * 50)
             logger.info("操作总结:")
@@ -453,6 +530,7 @@ class SpotTradingExample:
             logger.info("4. ✅ 下卖单 (交易者1卖出5 BTC，价格50,000 USDT)")
             logger.info("5. ✅ 下买单 (交易者2买入3 BTC，价格50,000 USDT) - 应该匹配成交")
             logger.info("6. ✅ 撤销剩余卖单 (2 BTC)")
+            logger.info("7. ✅ 更新市场参数")
             
         except Exception as e:
             logger.error(f"❌ 示例执行失败: {e}")

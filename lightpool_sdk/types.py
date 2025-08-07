@@ -11,6 +11,9 @@ import secrets
 import attr
 import attrs2bin
 from attrs2bin import UnsignedInt
+import struct
+from typing import List, Optional, Union
+from dataclasses import dataclass
 
 
 class OrderSide(enum.Enum):
@@ -155,42 +158,89 @@ class Address:
 
 
 class ObjectID:
-    """对象ID类型 - 16字节，与Rust端兼容"""
+    """ObjectID represents a 16-byte identifier"""
     
-    def __init__(self, value: Union[str, bytes, int]):
+    def __init__(self, value: Union[str, bytes]):
         if isinstance(value, str):
-            if value.startswith("0x"):
+            # Remove 0x prefix if present
+            if value.startswith('0x'):
                 value = value[2:]
-            if len(value) != 32:  # 16字节 = 32个十六进制字符
-                raise ValueError(f"Invalid ObjectID length: {len(value)}")
+            # Convert hex string to bytes
             self.value = bytes.fromhex(value)
         elif isinstance(value, bytes):
-            if len(value) != 16:  # 16字节
-                raise ValueError(f"Invalid ObjectID length: {len(value)}")
             self.value = value
-        elif isinstance(value, int):
-            self.value = value.to_bytes(16, byteorder='big')  # 16字节
         else:
             raise ValueError(f"Invalid ObjectID value: {value}")
+        
+        if len(self.value) != 16:
+            raise ValueError(f"Invalid ObjectID length: {len(self.value)}")
     
-    def __str__(self) -> str:
-        return "0x" + self.value.hex()
+    def __str__(self):
+        return f"0x{self.value.hex()}"
     
-    def __repr__(self) -> str:
+    def __repr__(self):
         return f"ObjectID('{self}')"
     
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other):
         if isinstance(other, ObjectID):
             return self.value == other.value
         return False
     
-    def __hash__(self) -> int:
+    def __hash__(self):
         return hash(self.value)
     
     @classmethod
-    def random(cls) -> 'ObjectID':
-        """生成随机对象ID"""
-        return cls(secrets.token_bytes(16))  # 16字节
+    def random(cls):
+        """Generate a random ObjectID"""
+        import os
+        return cls(os.urandom(16))
+
+class OrderId:
+    """OrderId represents a 32-byte identifier (4 u64 values)"""
+    
+    def __init__(self, value: Union[str, bytes, List[int]]):
+        if isinstance(value, str):
+            # Remove 0x prefix if present
+            if value.startswith('0x'):
+                value = value[2:]
+            # Convert hex string to bytes
+            self.value = bytes.fromhex(value)
+        elif isinstance(value, bytes):
+            self.value = value
+        elif isinstance(value, list):
+            # Convert list of 4 u64 values to bytes
+            if len(value) != 4:
+                raise ValueError(f"OrderId must have exactly 4 u64 values, got {len(value)}")
+            self.value = b''
+            for u64_val in value:
+                self.value += struct.pack('<Q', u64_val)
+        else:
+            raise ValueError(f"Invalid OrderId value: {value}")
+        
+        if len(self.value) != 32:
+            raise ValueError(f"Invalid OrderId length: {len(self.value)}")
+    
+    def __str__(self):
+        return f"0x{self.value.hex()}"
+    
+    def __repr__(self):
+        return f"OrderId('{self}')"
+    
+    def __eq__(self, other):
+        if isinstance(other, OrderId):
+            return self.value == other.value
+        return False
+    
+    def __hash__(self):
+        return hash(self.value)
+    
+    def as_array(self) -> List[int]:
+        """Convert to array of 4 u64 values"""
+        result = []
+        for i in range(4):
+            u64_bytes = self.value[i*8:(i+1)*8]
+            result.append(struct.unpack('<Q', u64_bytes)[0])
+        return result
 
 
 class Digest:
