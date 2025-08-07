@@ -155,21 +155,21 @@ class Address:
 
 
 class ObjectID:
-    """对象ID类型"""
+    """对象ID类型 - 16字节，与Rust端兼容"""
     
     def __init__(self, value: Union[str, bytes, int]):
         if isinstance(value, str):
             if value.startswith("0x"):
                 value = value[2:]
-            if len(value) != 64:
+            if len(value) != 32:  # 16字节 = 32个十六进制字符
                 raise ValueError(f"Invalid ObjectID length: {len(value)}")
             self.value = bytes.fromhex(value)
         elif isinstance(value, bytes):
-            if len(value) != 32:
+            if len(value) != 16:  # 16字节
                 raise ValueError(f"Invalid ObjectID length: {len(value)}")
             self.value = value
         elif isinstance(value, int):
-            self.value = value.to_bytes(32, byteorder='big')
+            self.value = value.to_bytes(16, byteorder='big')  # 16字节
         else:
             raise ValueError(f"Invalid ObjectID value: {value}")
     
@@ -190,7 +190,7 @@ class ObjectID:
     @classmethod
     def random(cls) -> 'ObjectID':
         """生成随机对象ID"""
-        return cls(secrets.token_bytes(32))
+        return cls(secrets.token_bytes(16))  # 16字节
 
 
 class Digest:
@@ -288,10 +288,56 @@ class UpdateMarketParams:
 
 @attr.s(auto_attribs=True)
 class PlaceOrderParams:
-    side: int = attr.ib()  # OrderSide as int for bincode compatibility
-    amount: int = attr.ib()  # u64 in Rust
-    order_type: int = attr.ib()  # OrderParamsType as enum index for bincode
-    limit_price: int = attr.ib()  # u64 in Rust (not optional)
+    side: int = attr.ib()              # OrderSide as int for bincode compatibility
+    amount: int = attr.ib()            # u64 in Rust
+    order_type: int = attr.ib()        # OrderParamsType as enum index for bincode (0=Limit, 1=Market, 2=Trigger)
+    limit_price: int = attr.ib()       # u64 in Rust (not optional)
+    # 可选字段，根据 order_type 使用
+    tif: Optional[int] = attr.ib(default=0)                    # For Limit orders
+    slippage: Optional[int] = attr.ib(default=100)             # For Market orders
+    trigger_price: Optional[int] = attr.ib(default=0)          # For Trigger orders
+    is_market: Optional[bool] = attr.ib(default=False)         # For Trigger orders
+    trigger_type: Optional[int] = attr.ib(default=0)           # For Trigger orders
+
+
+@attr.s(auto_attribs=True)
+class LimitOrderParams:
+    """限价单参数 - 对应Rust的OrderParamsType::Limit { tif }"""
+    tif: int = attr.ib()  # TimeInForce as int for bincode compatibility
+
+
+@attr.s(auto_attribs=True)
+class MarketOrderParams:
+    """市价单参数 - 对应Rust的OrderParamsType::Market { slippage }"""
+    slippage: int = attr.ib()  # u64 in Rust
+
+
+@attr.s(auto_attribs=True)
+class TriggerOrderParams:
+    """触发单参数 - 对应Rust的OrderParamsType::Trigger { trigger_price, is_market, trigger_type }"""
+    trigger_price: int = attr.ib()  # u64 in Rust
+    is_market: bool = attr.ib()
+    trigger_type: int = attr.ib()  # TriggerType as int for bincode compatibility
+
+
+@attr.s(auto_attribs=True)
+class LimitOrderParams:
+    """限价单参数 - 对应Rust的OrderParamsType::Limit { tif }"""
+    tif: int = attr.ib()  # TimeInForce as int for bincode compatibility
+
+
+@attr.s(auto_attribs=True)
+class MarketOrderParams:
+    """市价单参数 - 对应Rust的OrderParamsType::Market { slippage }"""
+    slippage: int = attr.ib()  # u64 in Rust
+
+
+@attr.s(auto_attribs=True)
+class TriggerOrderParams:
+    """触发单参数 - 对应Rust的OrderParamsType::Trigger { trigger_price, is_market, trigger_type }"""
+    trigger_price: int = attr.ib()  # u64 in Rust
+    is_market: bool = attr.ib()
+    trigger_type: int = attr.ib()  # TriggerType as int for bincode compatibility
 
 
 @attr.s(auto_attribs=True)
@@ -310,8 +356,12 @@ class OrderParamsType:
 class LimitOrderParams(OrderParamsType):
     """限价单参数"""
     
-    def __init__(self, tif: TimeInForce):
+    def __init__(self, tif: TimeInForce = TimeInForce.GTC):
         self.tif = tif
+    
+    def to_rust_index(self) -> int:
+        """转换为Rust枚举索引 - 目前只支持GTC"""
+        return 0  # OrderParamsType::Limit = 0
 
 
 class MarketOrderParams(OrderParamsType):
@@ -319,6 +369,45 @@ class MarketOrderParams(OrderParamsType):
     
     def __init__(self, slippage: int):
         self.slippage = slippage
+    
+    def to_rust_index(self) -> int:
+        """转换为Rust枚举索引"""
+        return 1  # OrderParamsType::Market = 1
+
+
+def create_limit_order_params(side: OrderSide, amount: int, limit_price: int, 
+                            tif: TimeInForce = TimeInForce.GTC) -> PlaceOrderParams:
+    """创建限价单参数的辅助函数"""
+    return PlaceOrderParams(
+        side=side.to_rust_index(),
+        amount=amount,
+        order_type=0,  # OrderParamsType::Limit = 0
+        limit_price=limit_price,
+        tif=tif.to_rust_index() if hasattr(tif, 'to_rust_index') else 0
+    )
+
+
+def create_market_order_params(side: OrderSide, amount: int, limit_price: int, 
+                             slippage: int = 100) -> PlaceOrderParams:
+    """创建市价单参数的辅助函数"""
+    return PlaceOrderParams(
+        side=side.to_rust_index(),
+        amount=amount,
+        order_type=1,  # OrderParamsType::Market = 1
+        limit_price=limit_price,
+        slippage=slippage
+    )
+
+
+def create_trigger_order_params(side: OrderSide, amount: int, limit_price: int,
+                              trigger_price: int, is_market: bool, trigger_type: int) -> PlaceOrderParams:
+    """创建触发单参数的辅助函数"""
+    return PlaceOrderParams(
+        side=side.to_rust_index(),
+        amount=amount,
+        order_type=2,  # OrderParamsType::Trigger = 2
+        limit_price=limit_price
+    )
 
 
 # 交易收据类型

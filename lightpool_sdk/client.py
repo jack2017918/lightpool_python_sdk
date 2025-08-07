@@ -42,7 +42,7 @@ class LightPoolClient:
         if self.session is None:
             self.session = aiohttp.ClientSession(timeout=self.timeout)
     
-    async def _make_request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _make_request(self, method: str, params) -> Dict[str, Any]:
         """
         发送RPC请求
         
@@ -55,12 +55,18 @@ class LightPoolClient:
         """
         await self._ensure_session()
         
+        # jsonrpsee使用位置参数，需要将参数包装在数组中
+        # SubmitTransactionParams作为第一个参数传递
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": method,
-            "params": [params]  # 使用数组格式，与Rust SDK保持一致
+            "params": [params]  # 使用位置参数数组格式
         }
+        
+        # Ensure clean JSON serialization
+        import json
+        clean_payload = json.loads(json.dumps(payload, separators=(',', ':')))
         
 
 
@@ -68,7 +74,7 @@ class LightPoolClient:
         try:
             async with self.session.post(
                 f"{self.base_url}/rpc",
-                json=payload,
+                json=clean_payload,
                 headers={"Content-Type": "application/json"}
             ) as response:
                 if response.status != 200:
@@ -147,12 +153,12 @@ class LightPoolClient:
             action_dict = {
                 "inputs": [objectid_to_bytes(obj_id) for obj_id in action.input_objects],
                 "contract": address_to_bytes(action.target_address),
-                "action": self._action_name_to_u64(action.action_type),
-                "params": list(action.params)  # 字节数组转换为整数列表
+                "action": self._action_name_to_u64(action.action_name),
+                "params": list(action.params)  # 字节数组转换为整数列表，与Rust Vec<u8>兼容
             }
             actions_list.append(action_dict)
         
-        # 构造transaction对象
+        # 构造transaction对象，与Rust Transaction结构保持一致
         transaction_dict = {
             "sender": address_to_bytes(transaction.signed_transaction.transaction.sender),
             "expiration": transaction.signed_transaction.transaction.expiration,
@@ -165,19 +171,32 @@ class LightPoolClient:
             sig_dict = self._signature_to_rust_format(sig)
             signatures_list.append(sig_dict)
         
-        # 最终构造tx_data
-        tx_data = {
+        # 构造SignedTransaction格式
+        signed_transaction = {
             "transaction": transaction_dict,
             "signatures": signatures_list
         }
         
+        # 构造SubmitTransactionParams格式，与Rust SDK保持一致
         params = {
-            "tx": tx_data
+            "tx": signed_transaction
         }
         
-
+        # 构造符合SubmitTransactionParams的格式
+        # SubmitTransactionParams { tx: SignedTransaction }
+        submit_transaction_params = {
+            "tx": {
+                "transaction": transaction_dict,
+                "signatures": signatures_list
+            }
+        }
         
-        result = await self._make_request("submitTransaction", params)
+        # Debug: print the transaction JSON (clean format)
+        import json
+        clean_json = json.dumps(submit_transaction_params, separators=(',', ':'))
+        print(f"📤 [PYTHON SDK] SubmitTransactionParams (clean): {clean_json}")
+        
+        result = await self._make_request("submitTransaction", submit_transaction_params)
         
         # 解析响应
         return {

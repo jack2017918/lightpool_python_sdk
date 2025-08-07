@@ -17,16 +17,16 @@ from .types import (
 )
 from .crypto import Signer
 from .exceptions import ValidationError, TransactionError
+from .bincode import bincode_serialize
 
 
 @dataclass
 class Action:
-    """交易操作"""
-    action_type: str
-    params: bytes  # 改为字节数组，与Rust版本一致
-    input_objects: List[ObjectID]
-    target_address: Address
-    module_address: Address
+    """交易操作，与Rust Action完全兼容"""
+    input_objects: List[ObjectID]   # 与Rust字段顺序一致
+    target_address: Address         # target_address
+    action_name: str               # action_name (Name类型)
+    params: bytes                  # params (Vec<u8>)
 
 
 class ActionBuilder:
@@ -35,15 +35,19 @@ class ActionBuilder:
     @staticmethod
     def create_token(contract_address: Address, params: CreateTokenParams) -> Action:
         """创建代币操作"""
-        # 使用bincode兼容的序列化，与Rust SDK保持一致
-        params_bytes = attrs2bin.serialize(params)
+        # 使用自定义bincode兼容的序列化，与Rust SDK保持一致
+        params_bytes = bincode_serialize(params)
+        
+        # 添加调试日志
+        print(f"📤 [PYTHON SDK] CreateToken serialized params hex: {params_bytes.hex()}")
+        print(f"📤 [PYTHON SDK] CreateToken params length: {len(params_bytes)} bytes")
+        print(f"📤 [PYTHON SDK] CreateToken original params: {params}")
         
         return Action(
-            action_type="create",
-            params=params_bytes,
             input_objects=[],
             target_address=contract_address,
-            module_address=contract_address
+            action_name="create",  # 与Rust CREATE_ACTION一致
+            params=params_bytes
         )
     
     @staticmethod
@@ -59,11 +63,10 @@ class ActionBuilder:
         params_bytes = params_json.encode('utf-8')
         
         return Action(
-            action_type="transfer",
-            params=params_bytes,
             input_objects=[balance_id],
             target_address=token_address,
-            module_address=token_address
+            action_name="transfer",  # 与Rust TRANSFER_ACTION一致
+            params=params_bytes
         )
     
     @staticmethod
@@ -79,11 +82,10 @@ class ActionBuilder:
         params_bytes = params_json.encode('utf-8')
         
         return Action(
-            action_type="mint",
-            params=params_bytes,
             input_objects=[token_id],
             target_address=token_address,
-            module_address=token_address
+            action_name="mint",  # 与Rust MINT_ACTION一致
+            params=params_bytes
         )
     
     @staticmethod
@@ -99,11 +101,10 @@ class ActionBuilder:
         params_bytes = params_json.encode('utf-8')
         
         return Action(
-            action_type="split",
-            params=params_bytes,
             input_objects=[balance_id],
             target_address=token_address,
-            module_address=token_address
+            action_name="split",  # 与Rust SPLIT_ACTION一致
+            params=params_bytes
         )
     
     @staticmethod
@@ -119,125 +120,81 @@ class ActionBuilder:
         params_bytes = params_json.encode('utf-8')
         
         return Action(
-            action_type="merge",
-            params=params_bytes,
             input_objects=[main_balance_id] + params.other_balance_ids,
             target_address=token_address,
-            module_address=token_address
+            action_name="merge",  # 与Rust MERGE_ACTION一致
+            params=params_bytes
         )
     
     @staticmethod
     def create_market(contract_address: Address, params: CreateMarketParams) -> Action:
         """创建市场操作"""
-        # 手动实现bincode兼容的序列化
-        import struct
+        # 使用自定义bincode兼容的序列化
+        params_bytes = bincode_serialize(params)
         
-        # 序列化字符串 (长度 + 内容)
-        name_bytes = params.name.encode('utf-8')
-        name_data = struct.pack('<Q', len(name_bytes)) + name_bytes
-        
-        # 序列化地址 (32字节)
-        base_token_data = params.base_token
-        quote_token_data = params.quote_token
-        
-        # 序列化整数
-        min_order_size_data = struct.pack('<Q', params.min_order_size)  # u64
-        tick_size_data = struct.pack('<Q', params.tick_size)  # u64
-        maker_fee_bps_data = struct.pack('<H', params.maker_fee_bps)  # u16
-        taker_fee_bps_data = struct.pack('<H', params.taker_fee_bps)  # u16
-        
-        # 序列化布尔值
-        allow_market_orders_data = struct.pack('<?', params.allow_market_orders)
-        
-        # 序列化枚举 (u32)
-        state_data = struct.pack('<I', params.state)
-        
-        # 序列化布尔值
-        limit_order_data = struct.pack('<?', params.limit_order)
-        
-        # 组合所有数据
-        params_bytes = (name_data + base_token_data + quote_token_data + 
-                       min_order_size_data + tick_size_data + 
-                       maker_fee_bps_data + taker_fee_bps_data + 
-                       allow_market_orders_data + state_data + limit_order_data)
+        # 添加调试日志
+        print(f"📤 [PYTHON SDK] CreateMarket serialized params hex: {params_bytes.hex()}")
+        print(f"📤 [PYTHON SDK] CreateMarket params length: {len(params_bytes)} bytes")
+        print(f"📤 [PYTHON SDK] CreateMarket original params: {params}")
         
         return Action(
-            action_type="mkt_create",
-            params=params_bytes,
             input_objects=[],
             target_address=contract_address,
-            module_address=contract_address
+            action_name="mkt_create",
+            params=params_bytes
         )
     
     @staticmethod
     def update_market(market_address: Address, market_id: ObjectID, params: UpdateMarketParams) -> Action:
         """更新市场操作"""
         return Action(
-            action_type="update_market",
-            params=asdict(params),
             input_objects=[market_id],
             target_address=market_address,
-            module_address=market_address
+            action_name="mkt_update",
+            params=asdict(params)
         )
     
     @staticmethod
     def place_order(market_address: Address, market_id: ObjectID, balance_id: ObjectID, params: PlaceOrderParams) -> Action:
         """下单操作"""
-        # 手动实现bincode兼容的序列化
-        import struct
+        # 使用自定义bincode兼容的序列化，与Rust SDK保持一致
+        params_bytes = bincode_serialize(params)
         
-        # 序列化PlaceOrderParams结构
-        # side: OrderSide (enum, u32 in bincode)
-        # amount: u64
-        # order_type: OrderParamsType (complex enum with data)
-        # limit_price: u64
+        # 添加调试日志
+        print(f"📤 [PYTHON SDK] PlaceOrder serialized params hex: {params_bytes.hex()}")
+        print(f"📤 [PYTHON SDK] PlaceOrder params length: {len(params_bytes)} bytes")
+        print(f"📤 [PYTHON SDK] PlaceOrder original params: {params}")
         
-        # 序列化OrderParamsType::Limit { tif }
-        # 枚举变体索引 0 + TimeInForce枚举值
-        order_type_data = (
-            struct.pack('<I', 0) +  # Limit variant = 0
-            struct.pack('<I', 0)    # TimeInForce::GTC = 0
-        )
-        
-        params_data = (
-            struct.pack('<I', params.side) +  # side as u32 (OrderSide enum)
-            struct.pack('<Q', params.amount) +  # amount as u64
-            order_type_data +  # order_type as OrderParamsType::Limit
-            struct.pack('<Q', params.limit_price)  # limit_price as u64
-        )
-        
-
         return Action(
-            action_type="ord_place",  # 修正action名称
-            params=params_data,
-            input_objects=[market_id, balance_id],
+            input_objects=[market_id, balance_id],  # 顺序与Rust一致
             target_address=market_address,
-            module_address=market_address
+            action_name="ord_place",               # 使用正确的字段名
+            params=params_bytes
         )
     
     @staticmethod
     def cancel_order(market_address: Address, market_id: ObjectID, params: CancelOrderParams) -> Action:
         """撤单操作"""
-        # 手动实现bincode兼容的序列化
-        # CancelOrderParams只包含order_id (OrderId类型，在Rust中是32字节)
-        params_data = params.order_id  # order_id as bytes (32 bytes)
+        # 使用自定义bincode兼容的序列化，与Rust SDK保持一致
+        params_bytes = bincode_serialize(params)
+        
+        # 添加调试日志
+        print(f"📤 [PYTHON SDK] CancelOrder serialized params hex: {params_bytes.hex() if hasattr(params_bytes, 'hex') else str(params_bytes)}")
+        print(f"📤 [PYTHON SDK] CancelOrder params length: {len(params_bytes) if hasattr(params_bytes, '__len__') else 'N/A'} bytes")
+        print(f"📤 [PYTHON SDK] CancelOrder original params: {params}")
         
         return Action(
-            action_type="ord_cancel",  # 修正action名称
-            params=params_data,
             input_objects=[market_id],
             target_address=market_address,
-            module_address=market_address
+            action_name="ord_cancel",
+            params=params_bytes
         )
 
 
 @dataclass
 class Transaction:
-    """交易结构"""
+    """交易结构，与Rust Transaction保持一致"""
     sender: Address
-    nonce: int
-    gas_budget: int
-    gas_price: int
     expiration: int
     actions: List[Action]
 
@@ -261,17 +218,13 @@ class VerifiedTransaction:
             "signedTransaction": {
                 "transaction": {
                     "sender": str(self.signed_transaction.transaction.sender),
-                    "nonce": self.signed_transaction.transaction.nonce,
-                    "gasBudget": self.signed_transaction.transaction.gas_budget,
-                    "gasPrice": self.signed_transaction.transaction.gas_price,
                     "expiration": self.signed_transaction.transaction.expiration,
                     "actions": [
                         {
-                            "actionType": action.action_type,
-                            "params": action.params.hex(),  # 字节数组转换为十六进制字符串
                             "inputObjects": [str(obj_id) for obj_id in action.input_objects],
                             "targetAddress": str(action.target_address),
-                            "moduleAddress": str(action.module_address)
+                            "actionName": action.action_name,      # 修正字段名
+                            "params": list(action.params)          # Vec<u8> 兼容格式
                         }
                         for action in self.signed_transaction.transaction.actions
                     ]
@@ -281,9 +234,9 @@ class VerifiedTransaction:
             "digest": str(self.digest)
         }
     
-    def _serialize_params(self, params: bytes) -> str:
-        """序列化参数，将字节数组转换为十六进制字符串"""
-        return params.hex()
+    def _serialize_params(self, params: bytes) -> list:
+        """序列化参数，将字节数组转换为整数列表，与Rust Vec<u8>兼容"""
+        return list(params)
 
 
 class TransactionBuilder:
@@ -291,9 +244,6 @@ class TransactionBuilder:
     
     def __init__(self):
         self._sender: Optional[Address] = None
-        self._nonce: int = 0
-        self._gas_budget: int = 1_000_000
-        self._gas_price: int = 1
         self._expiration: int = 0xFFFFFFFFFFFFFFFF  # 最大过期时间
         self._actions: List[Action] = []
     
@@ -342,9 +292,6 @@ class TransactionBuilder:
         
         return Transaction(
             sender=self._sender,
-            nonce=self._nonce,
-            gas_budget=self._gas_budget,
-            gas_price=self._gas_price,
             expiration=self._expiration,
             actions=self._actions
         )
@@ -378,17 +325,13 @@ class TransactionBuilder:
         # 简化的序列化实现
         tx_dict = {
             "sender": str(transaction.sender),
-            "nonce": transaction.nonce,
-            "gasBudget": transaction.gas_budget,
-            "gasPrice": transaction.gas_price,
             "expiration": transaction.expiration,
             "actions": [
                 {
-                    "actionType": action.action_type,
-                    "params": self._serialize_params(action.params),
                     "inputObjects": [str(obj_id) for obj_id in action.input_objects],
                     "targetAddress": str(action.target_address),
-                    "moduleAddress": str(action.module_address)
+                    "actionName": action.action_name,
+                    "params": self._serialize_params(action.params)
                 }
                 for action in transaction.actions
             ]
@@ -397,6 +340,16 @@ class TransactionBuilder:
         tx_json = json.dumps(tx_dict, sort_keys=True, separators=(',', ':'))
         return tx_json.encode('utf-8')
     
-    def _serialize_params(self, params: bytes) -> str:
-        """序列化参数，将字节数组转换为十六进制字符串"""
-        return params.hex() 
+    def _serialize_params(self, params) -> list:
+        """序列化参数，将字节数组转换为整数列表，与Rust Vec<u8>兼容"""
+        if isinstance(params, bytes):
+            return list(params)
+        elif isinstance(params, ObjectID):
+            # 如果参数是ObjectID，直接返回其字节表示
+            return list(params.value)
+        else:
+            # 其他类型，尝试转换为字节
+            if hasattr(params, 'value'):
+                return list(params.value)
+            else:
+                raise ValueError(f"Unsupported params type: {type(params)}") 

@@ -1,0 +1,298 @@
+Metadata-Version: 2.4
+Name: lightpool-sdk
+Version: 0.1.0
+Summary: Python SDK for LightPool blockchain with spot trading support
+Home-page: https://github.com/lightpool/lightpool-python-sdk
+Author: LightPool Team
+Author-email: team@lightpool.com
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: aiohttp>=3.8.0
+Requires-Dist: cryptography>=3.4.8
+Requires-Dist: eth-account>=0.8.0
+Requires-Dist: eth-utils>=2.0.0
+Requires-Dist: pydantic>=1.10.0
+Requires-Dist: typing-extensions>=4.0.0
+Requires-Dist: asyncio-mqtt>=0.11.0
+Requires-Dist: websockets>=10.0
+Requires-Dist: pytest>=7.0.0
+Requires-Dist: pytest-asyncio>=0.21.0
+Requires-Dist: pytest-cov>=4.0.0
+Requires-Dist: black>=22.0.0
+Requires-Dist: flake8>=5.0.0
+Requires-Dist: mypy>=0.991
+Requires-Dist: attrs2bin>=0.0.1
+Requires-Dist: attrs>=21.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: black>=22.0.0; extra == "dev"
+Requires-Dist: flake8>=5.0.0; extra == "dev"
+Requires-Dist: mypy>=0.991; extra == "dev"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# LightPool Python SDK
+
+一个用于与LightPool区块链进行交互的Python SDK，特别专注于现货交易功能。
+
+## 功能特性
+
+- 🔐 **加密操作**: 生成密钥对、签名交易
+- 🔧 **交易构建**: 流畅的API用于构建各种操作的交易
+- 🌐 **RPC客户端**: HTTP客户端用于与LightPool节点通信
+- 🪙 **代币操作**: 内置支持代币创建、转账、铸造、合并和分割
+- 📈 **现货交易**: 完整的现货交易功能，包括下单、撤单、查询订单簿
+- ⚡ **异步支持**: 使用asyncio的完整异步/等待支持
+
+## 安装
+
+```bash
+pip install -r requirements.txt
+```
+
+## 快速开始
+
+### 1. 创建签名者
+
+```python
+from lightpool_sdk import Signer
+
+# 生成新的随机密钥对
+signer = Signer.new()
+address = signer.address()
+print(f"地址: {address}")
+
+# 或者从现有私钥导入
+secret_key_bytes = bytes([0] * 32)  # 您的私钥字节
+signer = Signer.from_secret_key_bytes(secret_key_bytes)
+```
+
+### 2. 连接到节点
+
+```python
+from lightpool_sdk import LightPoolClient
+
+client = LightPoolClient("http://localhost:26300", timeout=30)
+
+# 测试连接
+is_healthy = await client.health_check()
+print(f"节点健康状态: {is_healthy}")
+```
+
+### 3. 创建并提交交易
+
+```python
+from lightpool_sdk import (
+    TransactionBuilder, ActionBuilder, CreateTokenParams,
+    Address, U256
+)
+
+# 创建代币参数
+create_params = CreateTokenParams(
+    name="我的代币",
+    symbol="MYT",
+    decimals=18,
+    total_supply=U256(1_000_000),
+    mintable=True
+)
+
+# 构建操作
+action = ActionBuilder.create_token(
+    Address.two(),  # 合约地址
+    Address.two(),  # 模块地址
+    create_params
+)
+
+# 构建并签名交易
+verified_tx = TransactionBuilder.new()\
+    .sender(signer.address())\
+    .nonce(1)\
+    .gas_budget(1_000_000)\
+    .gas_price(1)\
+    .add_action(action)\
+    .build_and_sign(signer)
+
+# 提交到网络
+response = await client.submit_transaction(verified_tx)
+print(f"交易哈希: {response.digest}")
+```
+
+## 现货交易示例
+
+### 创建市场
+
+```python
+from lightpool_sdk import CreateMarketParams, MarketState
+
+# 创建BTC/USDT市场
+market_params = CreateMarketParams(
+    name="BTC/USDT",
+    base_token=btc_token_address,
+    quote_token=usdt_token_address,
+    min_order_size=100_000,  # 0.1 BTC最小订单
+    tick_size=1_000_000,     # 1 USDT价格精度
+    maker_fee_bps=10,        # 0.1% maker费用
+    taker_fee_bps=20,        # 0.2% taker费用
+    allow_market_orders=True,
+    state=MarketState.Active,
+    limit_order=True
+)
+
+action = ActionBuilder.create_market(
+    SPOT_CONTRACT_ADDRESS,
+    market_params
+)
+
+tx = TransactionBuilder.new()\
+    .sender(signer.address())\
+    .add_action(action)\
+    .build_and_sign(signer)
+
+response = await client.submit_transaction(tx)
+```
+
+### 下单
+
+```python
+from lightpool_sdk import PlaceOrderParams, OrderSide, TimeInForce, OrderParamsType
+
+# 限价买单
+order_params = PlaceOrderParams(
+    side=OrderSide.Buy,
+    amount=1_000_000,  # 1 BTC (6位小数)
+    order_type=OrderParamsType.Limit(
+        tif=TimeInForce.GTC
+    ),
+    limit_price=50_000_000_000  # 50,000 USDT (6位小数)
+)
+
+action = ActionBuilder.place_order(
+    market_address,
+    market_id,
+    balance_id,
+    order_params
+)
+
+tx = TransactionBuilder.new()\
+    .sender(signer.address())\
+    .add_action(action)\
+    .build_and_sign(signer)
+
+response = await client.submit_transaction(tx)
+```
+
+### 撤单
+
+```python
+from lightpool_sdk import CancelOrderParams
+
+cancel_params = CancelOrderParams(
+    order_id=order_id
+)
+
+action = ActionBuilder.cancel_order(
+    market_address,
+    market_id,
+    cancel_params
+)
+
+tx = TransactionBuilder.new()\
+    .sender(signer.address())\
+    .add_action(action)\
+    .build_and_sign(signer)
+
+response = await client.submit_transaction(tx)
+```
+
+## 运行示例
+
+### 运行简单现货客户端示例:
+```bash
+python examples/simple_spot_client.py
+```
+
+### 运行高频交易示例:
+```bash
+python examples/burst_spot_client.py
+```
+
+## 错误处理
+
+SDK使用异常进行错误处理:
+
+```python
+try:
+    response = await client.submit_transaction(verified_tx)
+    print("交易提交成功!")
+    print(f"哈希: {response.digest}")
+    print(f"收据: {response.receipt}")
+except NetworkError as e:
+    print(f"网络错误: {e}")
+except CryptoError as e:
+    print(f"加密错误: {e}")
+except TransactionError as e:
+    print(f"交易错误: {e}")
+except Exception as e:
+    print(f"其他错误: {e}")
+```
+
+## 开发
+
+### 前置条件
+- Python 3.8+ (推荐Python 3.9+)
+- 运行中的LightPool节点（用于集成测试和示例）
+
+**注意**: 本项目已针对Python 3.8进行了兼容性优化，支持较老的Python版本。
+
+### 安装
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 安装SDK到开发环境（推荐）
+pip install -e .
+
+# 验证安装
+python test_import.py
+```
+
+### 构建
+```bash
+python setup.py build
+```
+
+### 测试
+```bash
+# 使用自定义脚本（推荐）
+python run_tests.py --run-integration  # 运行集成测试
+python run_tests.py --unit-only        # 只运行单元测试
+python run_tests.py --all              # 运行所有测试
+
+# 使用pytest直接运行
+python -m pytest tests/ -m "not integration"  # 单元测试
+python -m pytest tests/integration/ -m integration  # 集成测试
+python -m pytest tests/                          # 所有测试
+```
+
+## 许可证
+
+本项目采用与LightPool项目相同的许可证。 
