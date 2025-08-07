@@ -55,20 +55,18 @@ class LightPoolClient:
         """
         await self._ensure_session()
         
+        # 使用与Rust SDK完全相同的JSON格式
         payload = {
             "jsonrpc": "2.0",
-            "id": 1,
             "method": method,
-            "params": [params]  # 使用数组格式，与Rust SDK保持一致
+            "params": [params],  # 使用数组格式，与Rust SDK保持一致
+            "id": 1
         }
-        
-
-
         
         try:
             async with self.session.post(
                 f"{self.base_url}/rpc",
-                json=payload,
+                json=payload,  # 使用json参数，让aiohttp处理序列化
                 headers={"Content-Type": "application/json"}
             ) as response:
                 if response.status != 200:
@@ -76,8 +74,11 @@ class LightPoolClient:
                 
                 data = await response.json()
                 
+                print(f"DEBUG: RPC原始响应: {data}")
+                
                 if "error" in data:
                     error = data["error"]
+                    print(f"DEBUG: RPC错误详情: {error}")
                     raise RpcError(
                         message=error.get("message", "Unknown RPC error"),
                         code=error.get("code"),
@@ -148,39 +149,33 @@ class LightPoolClient:
                 "inputs": [objectid_to_bytes(obj_id) for obj_id in action.input_objects],
                 "contract": address_to_bytes(action.target_address),
                 "action": self._action_name_to_u64(action.action_type),
-                "params": list(action.params)  # 字节数组转换为整数列表
+                "params": list(action.params)  # 字节数组转换为整数列表，与Rust serde格式一致
             }
             actions_list.append(action_dict)
         
-        # 构造transaction对象
-        transaction_dict = {
-            "sender": address_to_bytes(transaction.signed_transaction.transaction.sender),
-            "expiration": transaction.signed_transaction.transaction.expiration,
-            "actions": actions_list
-        }
-        
-        # 构造signatures数组
-        signatures_list = []
-        for sig in transaction.signed_transaction.signatures:
-            sig_dict = self._signature_to_rust_format(sig)
-            signatures_list.append(sig_dict)
-        
-        # 最终构造tx_data
-        tx_data = {
-            "transaction": transaction_dict,
-            "signatures": signatures_list
-        }
-        
+        # 构造RPC请求参数 - 使用与Rust SDK完全相同的格式
         params = {
-            "tx": tx_data
+            "tx": {
+                "transaction": {
+                    "sender": address_to_bytes(transaction.signed_transaction.transaction.sender),
+                    "expiration": transaction.signed_transaction.transaction.expiration,
+                    "actions": actions_list
+                },
+                "signatures": [
+                    {
+                        "part1": list(sig[:32]),  # 前32字节作为part1
+                        "part2": list(sig[32:])   # 后32字节作为part2
+                    }
+                    for sig in transaction.signed_transaction.signatures
+                ]
+            }
         }
         
-
-        
+        # 使用与Rust SDK相同的JSON格式
         result = await self._make_request("submitTransaction", params)
         
         # 解析响应
-        return {
+        response = {
             "digest": result.get("digest"),
             "receipt": TransactionReceipt(
                 status=ExecutionStatus(result.get("receipt", {}).get("status", "failure")),
@@ -189,6 +184,11 @@ class LightPoolClient:
                 digest=result.get("digest", "")
             )
         }
+        
+        # 添加调试信息
+        print(f"DEBUG: RPC响应: {result}")
+        
+        return response
     
     def _serialize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """序列化参数，确保所有对象都能正确序列化"""

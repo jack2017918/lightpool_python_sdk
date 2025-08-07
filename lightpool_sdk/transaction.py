@@ -192,20 +192,41 @@ class ActionBuilder:
         # order_type: OrderParamsType (complex enum with data)
         # limit_price: u64
         
-        # 序列化OrderParamsType::Limit { tif }
-        # 枚举变体索引 0 + TimeInForce枚举值
-        order_type_data = (
-            struct.pack('<I', 0) +  # Limit variant = 0
-            struct.pack('<I', 0)    # TimeInForce::GTC = 0
-        )
+        # 序列化OrderParamsType枚举
+        # 根据变体类型序列化不同的数据
+        if params.order_type.variant == 0:  # Limit
+            # OrderParamsType::Limit { tif }
+            # 枚举变体索引 0 + TimeInForce枚举值
+            order_type_data = (
+                struct.pack('<I', 0) +  # Limit variant = 0
+                struct.pack('<I', params.order_type.tif or 0)  # TimeInForce
+            )
+        elif params.order_type.variant == 1:  # Market
+            # OrderParamsType::Market { slippage }
+            order_type_data = (
+                struct.pack('<I', 1) +  # Market variant = 1
+                struct.pack('<Q', params.order_type.slippage or 0)  # slippage as u64
+            )
+        elif params.order_type.variant == 2:  # Trigger
+            # OrderParamsType::Trigger { trigger_price, is_market, trigger_type }
+            order_type_data = (
+                struct.pack('<I', 2) +  # Trigger variant = 2
+                struct.pack('<Q', params.order_type.trigger_price or 0) +  # trigger_price as u64
+                struct.pack('<?', params.order_type.is_market or False) +  # is_market as bool
+                struct.pack('<B', params.order_type.trigger_type or 0)  # trigger_type as u8
+            )
+        else:
+            raise ValueError(f"Unsupported order type variant: {params.order_type.variant}")
         
         params_data = (
             struct.pack('<I', params.side) +  # side as u32 (OrderSide enum)
             struct.pack('<Q', params.amount) +  # amount as u64
-            order_type_data +  # order_type as OrderParamsType::Limit
+            order_type_data +  # order_type as OrderParamsType
             struct.pack('<Q', params.limit_price)  # limit_price as u64
         )
         
+        print(f"DEBUG: 序列化参数长度: {len(params_data)} 字节")
+        print(f"DEBUG: 序列化参数十六进制: {params_data.hex()}")
 
         return Action(
             action_type="ord_place",  # 修正action名称
@@ -294,7 +315,7 @@ class TransactionBuilder:
         self._nonce: int = 0
         self._gas_budget: int = 1_000_000
         self._gas_price: int = 1
-        self._expiration: int = 0xFFFFFFFFFFFFFFFF  # 最大过期时间
+        self._expiration: int = 0x7FFFFFFFFFFFFFFF  # 使用更合理的过期时间，避免JSON解析问题
         self._actions: List[Action] = []
     
     @classmethod

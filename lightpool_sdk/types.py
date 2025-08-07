@@ -147,29 +147,24 @@ class Address:
     def two(cls) -> 'Address':
         """返回地址2"""
         return cls(bytes([2] + [0] * 31))
-    
-    @classmethod
-    def random(cls) -> 'Address':
-        """生成随机地址"""
-        return cls(secrets.token_bytes(32))
 
 
 class ObjectID:
-    """对象ID类型"""
+    """对象ID类型 - 16字节，与Rust端保持一致"""
     
     def __init__(self, value: Union[str, bytes, int]):
         if isinstance(value, str):
             if value.startswith("0x"):
                 value = value[2:]
-            if len(value) != 64:
+            if len(value) != 32:  # 16字节 = 32个十六进制字符
                 raise ValueError(f"Invalid ObjectID length: {len(value)}")
             self.value = bytes.fromhex(value)
         elif isinstance(value, bytes):
-            if len(value) != 32:
+            if len(value) != 16:  # 16字节
                 raise ValueError(f"Invalid ObjectID length: {len(value)}")
             self.value = value
         elif isinstance(value, int):
-            self.value = value.to_bytes(32, byteorder='big')
+            self.value = value.to_bytes(16, byteorder='big')  # 16字节
         else:
             raise ValueError(f"Invalid ObjectID value: {value}")
     
@@ -188,9 +183,9 @@ class ObjectID:
         return hash(self.value)
     
     @classmethod
-    def random(cls) -> 'ObjectID':
-        """生成随机对象ID"""
-        return cls(secrets.token_bytes(32))
+    def from_u128(cls, value: int) -> 'ObjectID':
+        """从u128值创建ObjectID"""
+        return cls(value.to_bytes(16, byteorder='little'))
 
 
 class Digest:
@@ -290,7 +285,7 @@ class UpdateMarketParams:
 class PlaceOrderParams:
     side: int = attr.ib()  # OrderSide as int for bincode compatibility
     amount: int = attr.ib()  # u64 in Rust
-    order_type: int = attr.ib()  # OrderParamsType as enum index for bincode
+    order_type: 'OrderParamsType' = attr.ib()  # OrderParamsType enum for bincode compatibility
     limit_price: int = attr.ib()  # u64 in Rust (not optional)
 
 
@@ -299,8 +294,35 @@ class CancelOrderParams:
     order_id: bytes = attr.ib()  # OrderId as bytes for bincode compatibility
 
 
-# 订单参数类型枚举索引
+# 订单参数类型枚举 - 对应Rust的OrderParamsType枚举
+@attr.s(auto_attribs=True)
 class OrderParamsType:
+    """订单参数类型 - 对应Rust的OrderParamsType枚举"""
+    variant: int = attr.ib()  # 枚举变体索引
+    tif: Optional[int] = attr.ib(default=None)  # TimeInForce for Limit variant
+    slippage: Optional[int] = attr.ib(default=None)  # slippage for Market variant
+    trigger_price: Optional[int] = attr.ib(default=None)  # trigger_price for Trigger variant
+    is_market: Optional[bool] = attr.ib(default=None)  # is_market for Trigger variant
+    trigger_type: Optional[int] = attr.ib(default=None)  # trigger_type for Trigger variant
+    
+    @classmethod
+    def limit(cls, tif: int) -> 'OrderParamsType':
+        """创建限价单类型"""
+        return cls(variant=0, tif=tif)
+    
+    @classmethod
+    def market(cls, slippage: int) -> 'OrderParamsType':
+        """创建市价单类型"""
+        return cls(variant=1, slippage=slippage)
+    
+    @classmethod
+    def trigger(cls, trigger_price: int, is_market: bool, trigger_type: int) -> 'OrderParamsType':
+        """创建触发单类型"""
+        return cls(variant=2, trigger_price=trigger_price, is_market=is_market, trigger_type=trigger_type)
+
+
+# 为了向后兼容，保留旧的常量定义
+class OrderParamsTypeConstants:
     """订单参数类型索引 - 对应Rust的OrderParamsType枚举"""
     LIMIT = 0     # Limit order
     MARKET = 1    # Market order  
@@ -337,4 +359,4 @@ class TransactionReceipt:
 # Token模块地址：第一个字节是0x01，其余31字节为0
 TOKEN_CONTRACT_ADDRESS = Address(bytes([0x01] + [0x00] * 31))
 # Spot模块地址：第一个字节是0x02，其余31字节为0
-SPOT_CONTRACT_ADDRESS = Address(bytes([0x02] + [0x00] * 31)) 
+SPOT_CONTRACT_ADDRESS = Address(bytes([0x02] + [0x00] * 31))
