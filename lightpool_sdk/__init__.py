@@ -13,7 +13,7 @@ from .types import (
     CreateTokenParams, TransferParams, MintParams, SplitParams, MergeParams,
     CreateMarketParams, UpdateMarketParams, PlaceOrderParams, CancelOrderParams,
     TransactionReceipt, ExecutionStatus, LimitOrderParams, MarketOrderParams,
-    TOKEN_CONTRACT_ADDRESS, SPOT_CONTRACT_ADDRESS
+    TOKEN_CONTRACT_ADDRESS, SPOT_CONTRACT_ADDRESS, create_limit_order_params
 )
 from .exceptions import (
     LightPoolError, NetworkError, CryptoError, TransactionError,
@@ -63,6 +63,7 @@ __all__ = [
     # Constants
     "TOKEN_CONTRACT_ADDRESS",
     "SPOT_CONTRACT_ADDRESS",
+    "create_limit_order_params",
     
     # Exceptions
     "LightPoolError",

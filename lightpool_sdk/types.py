@@ -11,6 +11,9 @@ import secrets
 import attr
 import attrs2bin
 from attrs2bin import UnsignedInt
+import struct
+from typing import List, Optional, Union
+from dataclasses import dataclass
 
 
 class OrderSide(enum.Enum):
@@ -147,45 +150,97 @@ class Address:
     def two(cls) -> 'Address':
         """返回地址2"""
         return cls(bytes([2] + [0] * 31))
+    
+    @classmethod
+    def random(cls) -> 'Address':
+        """生成随机地址"""
+        return cls(secrets.token_bytes(32))
 
 
 class ObjectID:
-    """对象ID类型 - 16字节，与Rust端保持一致"""
+    """ObjectID represents a 16-byte identifier"""
     
-    def __init__(self, value: Union[str, bytes, int]):
+    def __init__(self, value: Union[str, bytes]):
         if isinstance(value, str):
-            if value.startswith("0x"):
+            # Remove 0x prefix if present
+            if value.startswith('0x'):
                 value = value[2:]
-            if len(value) != 32:  # 16字节 = 32个十六进制字符
-                raise ValueError(f"Invalid ObjectID length: {len(value)}")
+            # Convert hex string to bytes
             self.value = bytes.fromhex(value)
         elif isinstance(value, bytes):
-            if len(value) != 16:  # 16字节
-                raise ValueError(f"Invalid ObjectID length: {len(value)}")
             self.value = value
-        elif isinstance(value, int):
-            self.value = value.to_bytes(16, byteorder='big')  # 16字节
         else:
             raise ValueError(f"Invalid ObjectID value: {value}")
+        
+        if len(self.value) != 16:
+            raise ValueError(f"Invalid ObjectID length: {len(self.value)}")
     
-    def __str__(self) -> str:
-        return "0x" + self.value.hex()
+    def __str__(self):
+        return f"0x{self.value.hex()}"
     
-    def __repr__(self) -> str:
+    def __repr__(self):
         return f"ObjectID('{self}')"
     
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other):
         if isinstance(other, ObjectID):
             return self.value == other.value
         return False
     
-    def __hash__(self) -> int:
+    def __hash__(self):
         return hash(self.value)
     
     @classmethod
-    def from_u128(cls, value: int) -> 'ObjectID':
-        """从u128值创建ObjectID"""
-        return cls(value.to_bytes(16, byteorder='little'))
+    def random(cls):
+        """Generate a random ObjectID"""
+        import os
+        return cls(os.urandom(16))
+
+class OrderId:
+    """OrderId represents a 32-byte identifier (4 u64 values)"""
+    
+    def __init__(self, value: Union[str, bytes, List[int]]):
+        if isinstance(value, str):
+            # Remove 0x prefix if present
+            if value.startswith('0x'):
+                value = value[2:]
+            # Convert hex string to bytes
+            self.value = bytes.fromhex(value)
+        elif isinstance(value, bytes):
+            self.value = value
+        elif isinstance(value, list):
+            # Convert list of 4 u64 values to bytes
+            if len(value) != 4:
+                raise ValueError(f"OrderId must have exactly 4 u64 values, got {len(value)}")
+            self.value = b''
+            for u64_val in value:
+                self.value += struct.pack('<Q', u64_val)
+        else:
+            raise ValueError(f"Invalid OrderId value: {value}")
+        
+        if len(self.value) != 32:
+            raise ValueError(f"Invalid OrderId length: {len(self.value)}")
+    
+    def __str__(self):
+        return f"0x{self.value.hex()}"
+    
+    def __repr__(self):
+        return f"OrderId('{self}')"
+    
+    def __eq__(self, other):
+        if isinstance(other, OrderId):
+            return self.value == other.value
+        return False
+    
+    def __hash__(self):
+        return hash(self.value)
+    
+    def as_array(self) -> List[int]:
+        """Convert to array of 4 u64 values"""
+        result = []
+        for i in range(4):
+            u64_bytes = self.value[i*8:(i+1)*8]
+            result.append(struct.unpack('<Q', u64_bytes)[0])
+        return result
 
 
 class Digest:
@@ -283,10 +338,56 @@ class UpdateMarketParams:
 
 @attr.s(auto_attribs=True)
 class PlaceOrderParams:
-    side: int = attr.ib()  # OrderSide as int for bincode compatibility
-    amount: int = attr.ib()  # u64 in Rust
-    order_type: 'OrderParamsType' = attr.ib()  # OrderParamsType enum for bincode compatibility
-    limit_price: int = attr.ib()  # u64 in Rust (not optional)
+    side: int = attr.ib()              # OrderSide as int for bincode compatibility
+    amount: int = attr.ib()            # u64 in Rust
+    order_type: int = attr.ib()        # OrderParamsType as enum index for bincode (0=Limit, 1=Market, 2=Trigger)
+    limit_price: int = attr.ib()       # u64 in Rust (not optional)
+    # 可选字段，根据 order_type 使用
+    tif: Optional[int] = attr.ib(default=0)                    # For Limit orders
+    slippage: Optional[int] = attr.ib(default=100)             # For Market orders
+    trigger_price: Optional[int] = attr.ib(default=0)          # For Trigger orders
+    is_market: Optional[bool] = attr.ib(default=False)         # For Trigger orders
+    trigger_type: Optional[int] = attr.ib(default=0)           # For Trigger orders
+
+
+@attr.s(auto_attribs=True)
+class LimitOrderParams:
+    """限价单参数 - 对应Rust的OrderParamsType::Limit { tif }"""
+    tif: int = attr.ib()  # TimeInForce as int for bincode compatibility
+
+
+@attr.s(auto_attribs=True)
+class MarketOrderParams:
+    """市价单参数 - 对应Rust的OrderParamsType::Market { slippage }"""
+    slippage: int = attr.ib()  # u64 in Rust
+
+
+@attr.s(auto_attribs=True)
+class TriggerOrderParams:
+    """触发单参数 - 对应Rust的OrderParamsType::Trigger { trigger_price, is_market, trigger_type }"""
+    trigger_price: int = attr.ib()  # u64 in Rust
+    is_market: bool = attr.ib()
+    trigger_type: int = attr.ib()  # TriggerType as int for bincode compatibility
+
+
+@attr.s(auto_attribs=True)
+class LimitOrderParams:
+    """限价单参数 - 对应Rust的OrderParamsType::Limit { tif }"""
+    tif: int = attr.ib()  # TimeInForce as int for bincode compatibility
+
+
+@attr.s(auto_attribs=True)
+class MarketOrderParams:
+    """市价单参数 - 对应Rust的OrderParamsType::Market { slippage }"""
+    slippage: int = attr.ib()  # u64 in Rust
+
+
+@attr.s(auto_attribs=True)
+class TriggerOrderParams:
+    """触发单参数 - 对应Rust的OrderParamsType::Trigger { trigger_price, is_market, trigger_type }"""
+    trigger_price: int = attr.ib()  # u64 in Rust
+    is_market: bool = attr.ib()
+    trigger_type: int = attr.ib()  # TriggerType as int for bincode compatibility
 
 
 @attr.s(auto_attribs=True)
@@ -294,35 +395,8 @@ class CancelOrderParams:
     order_id: bytes = attr.ib()  # OrderId as bytes for bincode compatibility
 
 
-# 订单参数类型枚举 - 对应Rust的OrderParamsType枚举
-@attr.s(auto_attribs=True)
+# 订单参数类型枚举索引
 class OrderParamsType:
-    """订单参数类型 - 对应Rust的OrderParamsType枚举"""
-    variant: int = attr.ib()  # 枚举变体索引
-    tif: Optional[int] = attr.ib(default=None)  # TimeInForce for Limit variant
-    slippage: Optional[int] = attr.ib(default=None)  # slippage for Market variant
-    trigger_price: Optional[int] = attr.ib(default=None)  # trigger_price for Trigger variant
-    is_market: Optional[bool] = attr.ib(default=None)  # is_market for Trigger variant
-    trigger_type: Optional[int] = attr.ib(default=None)  # trigger_type for Trigger variant
-    
-    @classmethod
-    def limit(cls, tif: int) -> 'OrderParamsType':
-        """创建限价单类型"""
-        return cls(variant=0, tif=tif)
-    
-    @classmethod
-    def market(cls, slippage: int) -> 'OrderParamsType':
-        """创建市价单类型"""
-        return cls(variant=1, slippage=slippage)
-    
-    @classmethod
-    def trigger(cls, trigger_price: int, is_market: bool, trigger_type: int) -> 'OrderParamsType':
-        """创建触发单类型"""
-        return cls(variant=2, trigger_price=trigger_price, is_market=is_market, trigger_type=trigger_type)
-
-
-# 为了向后兼容，保留旧的常量定义
-class OrderParamsTypeConstants:
     """订单参数类型索引 - 对应Rust的OrderParamsType枚举"""
     LIMIT = 0     # Limit order
     MARKET = 1    # Market order  
@@ -332,8 +406,12 @@ class OrderParamsTypeConstants:
 class LimitOrderParams(OrderParamsType):
     """限价单参数"""
     
-    def __init__(self, tif: TimeInForce):
+    def __init__(self, tif: TimeInForce = TimeInForce.GTC):
         self.tif = tif
+    
+    def to_rust_index(self) -> int:
+        """转换为Rust枚举索引 - 目前只支持GTC"""
+        return 0  # OrderParamsType::Limit = 0
 
 
 class MarketOrderParams(OrderParamsType):
@@ -341,6 +419,45 @@ class MarketOrderParams(OrderParamsType):
     
     def __init__(self, slippage: int):
         self.slippage = slippage
+    
+    def to_rust_index(self) -> int:
+        """转换为Rust枚举索引"""
+        return 1  # OrderParamsType::Market = 1
+
+
+def create_limit_order_params(side: OrderSide, amount: int, limit_price: int, 
+                            tif: TimeInForce = TimeInForce.GTC) -> PlaceOrderParams:
+    """创建限价单参数的辅助函数"""
+    return PlaceOrderParams(
+        side=side.to_rust_index(),
+        amount=amount,
+        order_type=0,  # OrderParamsType::Limit = 0
+        limit_price=limit_price,
+        tif=tif.to_rust_index() if hasattr(tif, 'to_rust_index') else 0
+    )
+
+
+def create_market_order_params(side: OrderSide, amount: int, limit_price: int, 
+                             slippage: int = 100) -> PlaceOrderParams:
+    """创建市价单参数的辅助函数"""
+    return PlaceOrderParams(
+        side=side.to_rust_index(),
+        amount=amount,
+        order_type=1,  # OrderParamsType::Market = 1
+        limit_price=limit_price,
+        slippage=slippage
+    )
+
+
+def create_trigger_order_params(side: OrderSide, amount: int, limit_price: int,
+                              trigger_price: int, is_market: bool, trigger_type: int) -> PlaceOrderParams:
+    """创建触发单参数的辅助函数"""
+    return PlaceOrderParams(
+        side=side.to_rust_index(),
+        amount=amount,
+        order_type=2,  # OrderParamsType::Trigger = 2
+        limit_price=limit_price
+    )
 
 
 # 交易收据类型
@@ -359,4 +476,4 @@ class TransactionReceipt:
 # Token模块地址：第一个字节是0x01，其余31字节为0
 TOKEN_CONTRACT_ADDRESS = Address(bytes([0x01] + [0x00] * 31))
 # Spot模块地址：第一个字节是0x02，其余31字节为0
-SPOT_CONTRACT_ADDRESS = Address(bytes([0x02] + [0x00] * 31))
+SPOT_CONTRACT_ADDRESS = Address(bytes([0x02] + [0x00] * 31)) 
