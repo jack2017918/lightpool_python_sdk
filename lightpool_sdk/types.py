@@ -194,6 +194,11 @@ class ObjectID:
         """Generate a random ObjectID"""
         import os
         return cls(os.urandom(16))
+    
+    @classmethod
+    def from_u128(cls, value: int) -> 'ObjectID':
+        """从u128值创建ObjectID"""
+        return cls(value.to_bytes(16, byteorder='little'))
 
 class OrderId:
     """OrderId represents a 32-byte identifier (4 u64 values)"""

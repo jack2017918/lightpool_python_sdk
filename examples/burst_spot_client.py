@@ -12,6 +12,7 @@ import asyncio
 import logging
 import time
 import random
+import secrets
 from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -91,6 +92,77 @@ class BurstSpotTradingExample:
             logger.error(f"❌ 连接节点失败: {e}")
             return False
     
+    async def create_token(self, name: str, symbol: str, total_supply: int) -> Tuple[ObjectID, Address, ObjectID]:
+        """创建单个代币"""
+        logger.info(f"创建代币: {name} ({symbol})")
+        
+        create_params = CreateTokenParams(
+            name=name,
+            symbol=symbol,
+            total_supply=total_supply,
+            mintable=True,
+            to=self.trader.address().to_bytes()  # 使用用户地址作为余额对象的所有者
+        )
+        
+        action = ActionBuilder.create_token(TOKEN_CONTRACT_ADDRESS, create_params)
+        
+        tx = TransactionBuilder.new()\
+            .sender(self.trader.address())\
+            .expiration(0xFFFFFFFFFFFFFFFF)\
+            .add_action(action)\
+            .build_and_sign(self.trader)
+        
+        try:
+            response = await self.client.submit_transaction(tx)
+            
+            if response["receipt"].is_success():
+                logger.info(f"✅ {symbol} 代币创建成功")
+                
+                # 从事件中提取代币信息
+                events = response["receipt"].events
+                for event in events:
+                    if event.get("event_type", {}).get("Call") == "token_created":
+                        # 解析token_created事件的数据 (bincode序列化的TokenCreatedEvent)
+                        event_data = event.get("data", {}).get("Bytes", [])
+
+                        if len(event_data) >= 100:  # 降低要求，先看看能否解析
+                            try:
+                                import struct
+                                data = bytes(event_data)
+                                
+                                # 简化解析：直接提取关键字段
+                                # token_id: ObjectID (前16字节)
+                                token_id_bytes = data[0:16]
+                                token_id = ObjectID(token_id_bytes.hex())
+                                
+                                # balance_id: ObjectID (最后16字节)
+                                balance_id_bytes = data[-16:]
+                                balance_id = ObjectID(balance_id_bytes.hex())
+                                
+                                # token地址就是合约地址
+                                token_address = TOKEN_CONTRACT_ADDRESS
+                                
+                                logger.info(f"📊 提取的对象ID: token_id={token_id}, balance_id={balance_id}")
+                                return token_id, token_address, balance_id
+                            except Exception as e:
+                                logger.warning(f"⚠️ 解析TokenCreatedEvent失败: {e}")
+                                break
+                
+                # 如果无法解析事件，回退到模拟
+                logger.warning("⚠️ 无法解析代币创建事件，使用模拟ID")
+                token_id = ObjectID(secrets.token_hex(16))
+                token_address = Address(secrets.token_hex(32))
+                balance_id = ObjectID(secrets.token_hex(16))
+                
+                return token_id, token_address, balance_id
+            else:
+                logger.error(f"❌ {symbol} 代币创建失败")
+                raise Exception("Token creation failed")
+                
+        except Exception as e:
+            logger.error(f"❌ 提交代币创建交易失败: {e}")
+            raise
+    
     async def create_tokens_batch(self, num_tokens: int) -> List[Tuple[ObjectID, Address, ObjectID]]:
         """批量创建代币"""
         logger.info(f"批量创建 {num_tokens} 个代币...")
@@ -99,43 +171,135 @@ class BurstSpotTradingExample:
         for i in range(num_tokens):
             name = f"Token{i+1}"
             symbol = f"TKN{i+1}"
-            
-            create_params = CreateTokenParams(
-                name=name,
-                symbol=symbol,
-                decimals=6,
-                total_supply=U256(1_000_000_000_000),  # 1B tokens
-                mintable=True,
-                to=self.trader.address()
-            )
-            
-            action = ActionBuilder.create_token(TOKEN_CONTRACT_ADDRESS, create_params)
-            
-            tx = TransactionBuilder.new()\
-                .sender(self.trader.address())\
-                .expiration(0xFFFFFFFFFFFFFFFF)\
-                .add_action(action)\
-                .build_and_sign(self.trader)
+            total_supply = 1_000_000_000_000  # 1B tokens
             
             try:
-                response = await self.client.submit_transaction(tx)
+                token_id, token_address, balance_id = await self.create_token(name, symbol, total_supply)
+                tokens.append((token_id, token_address, balance_id))
+                logger.info(f"✅ 创建代币 {symbol}")
                 
-                if response["receipt"].is_success():
-                    # 模拟代币信息
-                    token_id = ObjectID.random()
-                    token_address = Address.random()
-                    balance_id = ObjectID.random()
-                    
-                    tokens.append((token_id, token_address, balance_id))
-                    logger.info(f"✅ 创建代币 {symbol}")
-                else:
-                    logger.error(f"❌ 创建代币 {symbol} 失败")
-                    
+                # 等待一下避免过快提交
+                await asyncio.sleep(0.1)
+                
             except Exception as e:
-                logger.error(f"❌ 提交代币 {symbol} 创建交易失败: {e}")
+                logger.error(f"❌ 创建代币 {symbol} 失败: {e}")
         
         logger.info(f"✅ 成功创建 {len(tokens)} 个代币")
         return tokens
+    
+    async def create_market(self, name: str, base_token: Address, quote_token: Address) -> MarketInfo:
+        """创建单个市场"""
+        logger.info(f"创建市场: {name}")
+        
+        market_params = CreateMarketParams(
+            name=name,
+            base_token=base_token.to_bytes(),  # 转换为字节数组
+            quote_token=quote_token.to_bytes(),  # 转换为字节数组
+            min_order_size=100_000,  # 0.1 最小订单
+            tick_size=1_000_000,     # 1 价格精度
+            maker_fee_bps=10,        # 0.1% maker费用
+            taker_fee_bps=20,        # 0.2% taker费用
+            allow_market_orders=True,
+            state=MarketState.ACTIVE.to_rust_index(),  # 转换为Rust枚举索引
+            limit_order=True
+        )
+        
+        action = ActionBuilder.create_market(SPOT_CONTRACT_ADDRESS, market_params)
+        
+        tx = TransactionBuilder.new()\
+            .sender(self.trader.address())\
+            .expiration(0xFFFFFFFFFFFFFFFF)\
+            .add_action(action)\
+            .build_and_sign(self.trader)
+        
+        try:
+            response = await self.client.submit_transaction(tx)
+            
+            if response["receipt"].is_success():
+                logger.info(f"✅ {name} 市场创建成功")
+                
+                # 从事件中提取市场信息
+                events = response["receipt"].events
+                for event in events:
+                    if event.get("event_type", {}).get("Call") == "market_created":
+                        # 解析market_created事件的数据 (bincode序列化的MarketCreatedEvent)
+                        event_data = event.get("data", {}).get("Bytes", [])
+
+                        if len(event_data) >= 100:  # 降低要求，先看看能否解析
+                            try:
+                                import struct
+                                data = bytes(event_data)
+                                
+                                # 简化解析：直接提取关键字段
+                                # market_id: ObjectID (前16字节)
+                                market_id_bytes = data[0:16]
+                                market_id = ObjectID(market_id_bytes.hex())
+                                
+                                # 临时解决方案：使用已知的模式
+                                # 根据Rust端的逻辑，余额对象ID应该是连续的序列号
+                                market_id_value = int.from_bytes(market_id_bytes, byteorder='little')
+                                base_balance_id = ObjectID.from_u128(market_id_value + 5)  # 跳过更多中间对象
+                                quote_balance_id = ObjectID.from_u128(market_id_value + 6)  # 再跳过更多中间对象
+                                
+                                logger.info(f"📊 市场余额对象: base_balance_id={base_balance_id}, quote_balance_id={quote_balance_id}")
+                                
+                                # 生成市场地址
+                                market_address = Address(secrets.token_hex(32))
+                                
+                                # 设置基础价格和价格精度
+                                base_price = 10_000_000 + (len(self.markets) * 1_000_000)  # 10-110 基础价格
+                                tick_size = 1_000_000
+                                
+                                market_info = MarketInfo(
+                                    market_id=market_id,
+                                    market_address=market_address,
+                                    base_token=base_token,
+                                    quote_token=quote_token,
+                                    base_balance_id=base_balance_id,
+                                    quote_balance_id=quote_balance_id,
+                                    base_price=base_price,
+                                    tick_size=tick_size,
+                                    current_price=base_price
+                                )
+                                
+                                logger.info(f"📊 市场创建完成, market_id: {market_id}, market_address: {market_address}, base_balance_id: {base_balance_id}, quote_balance_id: {quote_balance_id}")
+                                return market_info
+                                
+                            except Exception as e:
+                                logger.warning(f"⚠️ 解析MarketCreatedEvent失败: {e}")
+                                break
+                
+                # 如果无法解析事件，回退到模拟
+                logger.warning("⚠️ 无法解析市场创建事件，使用模拟ID")
+                market_id = ObjectID(secrets.token_hex(16))
+                market_address = Address(secrets.token_hex(32))
+                base_balance_id = ObjectID(secrets.token_hex(16))
+                quote_balance_id = ObjectID(secrets.token_hex(16))
+                
+                # 设置基础价格和价格精度
+                base_price = 10_000_000 + (len(self.markets) * 1_000_000)  # 10-110 基础价格
+                tick_size = 1_000_000
+                
+                market_info = MarketInfo(
+                    market_id=market_id,
+                    market_address=market_address,
+                    base_token=base_token,
+                    quote_token=quote_token,
+                    base_balance_id=base_balance_id,
+                    quote_balance_id=quote_balance_id,
+                    base_price=base_price,
+                    tick_size=tick_size,
+                    current_price=base_price
+                )
+                
+                return market_info
+            else:
+                logger.error(f"❌ {name} 市场创建失败")
+                raise Exception("Market creation failed")
+                
+        except Exception as e:
+            logger.error(f"❌ 提交市场创建交易失败: {e}")
+            raise
     
     async def create_markets_batch(self, num_markets: int) -> List[MarketInfo]:
         """批量创建市场"""
@@ -153,56 +317,20 @@ class BurstSpotTradingExample:
             base_token_id, base_token_address, base_balance_id = self.tokens[token1_idx]
             quote_token_id, quote_token_address, quote_balance_id = self.tokens[token2_idx]
             
-            market_params = CreateMarketParams(
-                name=f"Market{i+1}",
-                base_token=base_token_address,
-                quote_token=quote_token_address,
-                min_order_size=100_000,  # 0.1 最小订单
-                tick_size=100_000,       # 0.1 价格精度
-                maker_fee_bps=10,        # 0.1% maker费用
-                taker_fee_bps=20,        # 0.2% taker费用
-                allow_market_orders=True,
-                state=MarketState.ACTIVE,
-                limit_order=True
-            )
-            
-            action = ActionBuilder.create_market(SPOT_CONTRACT_ADDRESS, market_params)
-            
-            tx = TransactionBuilder.new()\
-                .sender(self.trader.address())\
-                .expiration(0xFFFFFFFFFFFFFFFF)\
-                .add_action(action)\
-                .build_and_sign(self.trader)
-            
             try:
-                response = await self.client.submit_transaction(tx)
+                market_info = await self.create_market(
+                    name=f"Market{i+1}",
+                    base_token=base_token_address,
+                    quote_token=quote_token_address
+                )
+                markets.append(market_info)
+                logger.info(f"✅ 创建市场 Market{i+1}")
                 
-                if response["receipt"].is_success():
-                    # 模拟市场信息
-                    market_id = ObjectID.random()
-                    market_address = Address.random()
-                    base_price = 10_000_000 + (i * 1_000_000)  # 10-110 基础价格
-                    tick_size = 100_000
-                    
-                    market_info = MarketInfo(
-                        market_id=market_id,
-                        market_address=market_address,
-                        base_token=base_token_address,
-                        quote_token=quote_token_address,
-                        base_balance_id=base_balance_id,
-                        quote_balance_id=quote_balance_id,
-                        base_price=base_price,
-                        tick_size=tick_size,
-                        current_price=base_price
-                    )
-                    
-                    markets.append(market_info)
-                    logger.info(f"✅ 创建市场 Market{i+1}")
-                else:
-                    logger.error(f"❌ 创建市场 Market{i+1} 失败")
-                    
+                # 等待一下避免过快提交
+                await asyncio.sleep(0.1)
+                
             except Exception as e:
-                logger.error(f"❌ 提交市场 Market{i+1} 创建交易失败: {e}")
+                logger.error(f"❌ 创建市场 Market{i+1} 失败: {e}")
         
         logger.info(f"✅ 成功创建 {len(markets)} 个市场")
         return markets
@@ -262,10 +390,11 @@ class BurstSpotTradingExample:
             balance_id = market.base_balance_id if side == OrderSide.SELL else market.quote_balance_id
             
             order_params = PlaceOrderParams(
-                side=side,
+                side=side.to_rust_index(),
                 amount=amount,
-                order_type=LimitOrderParams(TimeInForce.GTC),
-                limit_price=price
+                order_type=0,  # OrderParamsType::Limit = 0
+                limit_price=price,
+                tif=0  # TimeInForce::GTC = 0
             )
             
             action = ActionBuilder.place_order(
