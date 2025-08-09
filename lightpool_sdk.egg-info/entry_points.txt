@@ -1,2 +1,0 @@
-[console_scripts]
-lightpool-cli = lightpool_sdk.cli:main

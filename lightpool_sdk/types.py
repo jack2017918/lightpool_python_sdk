@@ -376,26 +376,6 @@ class TriggerOrderParams:
 
 
 @attr.s(auto_attribs=True)
-class LimitOrderParams:
-    """限价单参数 - 对应Rust的OrderParamsType::Limit { tif }"""
-    tif: int = attr.ib()  # TimeInForce as int for bincode compatibility
-
-
-@attr.s(auto_attribs=True)
-class MarketOrderParams:
-    """市价单参数 - 对应Rust的OrderParamsType::Market { slippage }"""
-    slippage: int = attr.ib()  # u64 in Rust
-
-
-@attr.s(auto_attribs=True)
-class TriggerOrderParams:
-    """触发单参数 - 对应Rust的OrderParamsType::Trigger { trigger_price, is_market, trigger_type }"""
-    trigger_price: int = attr.ib()  # u64 in Rust
-    is_market: bool = attr.ib()
-    trigger_type: int = attr.ib()  # TriggerType as int for bincode compatibility
-
-
-@attr.s(auto_attribs=True)
 class CancelOrderParams:
     order_id: bytes = attr.ib()  # OrderId as bytes for bincode compatibility
 
@@ -472,6 +452,9 @@ class TransactionReceipt:
     events: List[Dict[str, Any]]
     effects: Dict[str, Any]
     digest: str
+    # 附加调试字段：保留原始状态与错误信息，便于定位失败原因
+    raw_status: Any = None
+    error: Optional[str] = None
     
     def is_success(self) -> bool:
         return self.status in (ExecutionStatus.SUCCESS, ExecutionStatus.Success)
