@@ -44,7 +44,8 @@ class SpotTradingExample:
         
         logger.info(f"交易者1地址: {self.trader1.address()}")
         logger.info(f"交易者2地址: {self.trader2.address()}")
-    
+        logger.info(f"交易者1私钥: {self.trader1.private_key_bytes().hex()}")
+        logger.info(f"交易者2私钥: {self.trader2.private_key_bytes().hex()}")
     async def __aenter__(self):
         """异步上下文管理器入口"""
         self.client = LightPoolClient(self.rpc_url)
