@@ -7,17 +7,41 @@ LightPool Python SDK
 from .client import LightPoolClient
 from .crypto import Signer
 from .transaction import TransactionBuilder, ActionBuilder
+from .trading_client import LightPoolTradingClient, MarketInfo, UserBalance, OrderResult
 from .types import (
-    Address, ObjectID, U256, Digest,
-    OrderSide, TimeInForce, OrderParamsType, MarketState,
-    CreateTokenParams, TransferParams, MintParams, SplitParams, MergeParams,
-    CreateMarketParams, UpdateMarketParams, PlaceOrderParams, CancelOrderParams,
-    TransactionReceipt, ExecutionStatus, LimitOrderParams, MarketOrderParams,
-    TOKEN_CONTRACT_ADDRESS, SPOT_CONTRACT_ADDRESS, create_limit_order_params
+    Address,
+    ObjectID,
+    U256,
+    Digest,
+    OrderId,
+    OrderSide,
+    TimeInForce,
+    OrderParamsType,
+    MarketState,
+    CreateTokenParams,
+    TransferParams,
+    MintParams,
+    SplitParams,
+    MergeParams,
+    CreateMarketParams,
+    UpdateMarketParams,
+    PlaceOrderParams,
+    CancelOrderParams,
+    TransactionReceipt,
+    ExecutionStatus,
+    LimitOrderParams,
+    MarketOrderParams,
+    TOKEN_CONTRACT_ADDRESS,
+    SPOT_CONTRACT_ADDRESS,
+    create_limit_order_params,
 )
 from .exceptions import (
-    LightPoolError, NetworkError, CryptoError, TransactionError,
-    ValidationError, RpcError
+    LightPoolError,
+    NetworkError,
+    CryptoError,
+    TransactionError,
+    ValidationError,
+    RpcError,
 )
 
 __version__ = "0.1.0"
@@ -30,24 +54,27 @@ __all__ = [
     "Signer",
     "TransactionBuilder",
     "ActionBuilder",
-    
+    # High-level trading client
+    "LightPoolTradingClient",
+    "MarketInfo",
+    "UserBalance",
+    "OrderResult",
     # Types
     "Address",
-    "ObjectID", 
+    "ObjectID",
     "U256",
     "Digest",
+    "OrderId",
     "OrderSide",
     "TimeInForce",
     "OrderParamsType",
     "MarketState",
-    
     # Token parameters
     "CreateTokenParams",
     "TransferParams",
     "MintParams",
     "SplitParams",
     "MergeParams",
-    
     # Spot trading parameters
     "CreateMarketParams",
     "UpdateMarketParams",
@@ -55,16 +82,13 @@ __all__ = [
     "CancelOrderParams",
     "LimitOrderParams",
     "MarketOrderParams",
-    
     # Transaction results
     "TransactionReceipt",
     "ExecutionStatus",
-    
     # Constants
     "TOKEN_CONTRACT_ADDRESS",
     "SPOT_CONTRACT_ADDRESS",
     "create_limit_order_params",
-    
     # Exceptions
     "LightPoolError",
     "NetworkError",
@@ -72,4 +96,4 @@ __all__ = [
     "TransactionError",
     "ValidationError",
     "RpcError",
-] 
+]
